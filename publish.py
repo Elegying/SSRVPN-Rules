@@ -11,8 +11,8 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-import fnmatch
 import urllib.request
+from review import review_changes, review_core, review_routes, write_report
 
 ROOT = Path(__file__).resolve().parent
 LIMIT = 4 * 1024 * 1024
@@ -105,7 +105,7 @@ def version_tuple(version):
     return tuple(map(int, version.split('.')))
 
 
-def build(key, upstream_commit=None):
+def build(key, upstream_commit=None, core=None):
     latest = ROOT / 'latest'
     previous = None
     previous_snapshot = None
@@ -132,22 +132,9 @@ def build(key, upstream_commit=None):
         if old_count and not 0.8 * old_count <= len(values) <= 1.2 * old_count:
             raise ValueError(f'abnormal upstream count change: {name}')
         payloads[name] = values
-    # Semantic canaries are checked before signing, not merely YAML syntax.
-    def matches(domain, values):
-        return any(fnmatch.fnmatchcase(domain, v.removeprefix('+.')) or
-                   (v.startswith('+.') and fnmatch.fnmatchcase(domain, '*.' + v[2:])) for v in values)
-    for domain in ['google.com', 'youtube.com', 'facebook.com']:
-        if not matches(domain, payloads['gfw.yaml']) and not matches(domain, payloads['foreign_services.yaml']):
-            raise ValueError('proxy canary missing')
-        if matches(domain, payloads['cn.yaml']):
-            raise ValueError('proxy canary unexpectedly direct')
-    for domain in ['baidu.com', 'qq.com', 'taobao.com']:
-        if not matches(domain, payloads['cn.yaml']):
-            raise ValueError('direct canary missing')
-        if any(matches(domain, payloads[name]) for name in [
-            'gfw.yaml', 'foreign_services.yaml', 'ai_services.yaml',
-            'streaming_services.yaml', 'user_feedback_rules.yaml']):
-            raise ValueError('direct canary unexpectedly proxied')
+    cases = json.loads((ROOT / 'review-cases.json').read_text())
+    checked = review_routes(payloads, cases)
+    write_report(f'Routing expectations: {checked} PASS')
     components = dict(previous['componentVersions']) if previous else {'rules': '2.0.0', 'directApps': '1.0.0', 'proxyApps': '1.0.0'}
     for stem, component, filename in [('direct-apps', 'directApps', 'direct_apps.yaml'), ('proxy-apps', 'proxyApps', 'proxy_apps.yaml')]:
         data = json.loads((ROOT / 'lists' / (stem + '.json')).read_text())
@@ -161,6 +148,17 @@ def build(key, upstream_commit=None):
     contents = {name: encode(values) for name, values in payloads.items()}
     entries = [{'name': name, 'behavior': ('packages' if name.endswith('_apps.yaml') else 'ipcidr' if name == 'company_asn.yaml' else 'domain'),
                 'count': len(payloads[name]), 'sha256': hashlib.sha256(text.encode()).hexdigest()} for name, text in sorted(contents.items())]
+    previous_payloads = {}
+    for name, entry in old_entries.items():
+        old_text = (previous_snapshot / name).read_text()
+        if hashlib.sha256(old_text.encode()).hexdigest() != entry['sha256']:
+            raise ValueError('previous snapshot payload mismatch')
+        previous_payloads[name] = read_payload(old_text, entry['behavior'])
+    write_report('## Candidate rule review\nSource commit: `' + commit + '`')
+    write_report(review_changes(payloads, previous_payloads, SOURCES))
+    if core is not None:
+        review_core(core, contents, entries)
+        write_report('Core syntax and every provider count: PASS')
     changed = {e['name'] for e in entries if e['sha256'] != old_entries.get(e['name'], {}).get('sha256')}
     if previous:
         for component, filename in [('directApps', 'direct_apps.yaml'), ('proxyApps', 'proxy_apps.yaml')]:
@@ -213,5 +211,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--key', required=True, type=Path)
     parser.add_argument('--upstream-commit')
+    parser.add_argument('--core', required=True, type=Path)
     args = parser.parse_args()
-    build(args.key, args.upstream_commit)
+    try:
+        build(args.key, args.upstream_commit, args.core)
+    except Exception as error:
+        write_report(f'Rule review/publication FAILED: {type(error).__name__}: {error}')
+        raise

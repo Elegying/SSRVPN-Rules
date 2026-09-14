@@ -5,7 +5,7 @@ on:
     - cron: '17 1 * * *'
   push:
     branches: [main]
-    paths: ['lists/**', 'baseline/**', 'publish.py', 'test_publish.py', 'public-key.pem', '.github/workflows/update.yml']
+    paths: ['lists/**', 'baseline/**', 'publish.py', 'review.py', 'review-cases.json', 'test_publish.py', 'public-key.pem', '.github/workflows/update.yml']
 permissions:
   contents: write
 concurrency:
@@ -21,6 +21,14 @@ jobs:
           ref: main
       - name: Validate publisher
         run: python3 -m unittest test_publish
+      - name: Prepare pinned compatibility core
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 --max-time 120 --output "$RUNNER_TEMP/mihomo.gz" https://github.com/MetaCubeX/mihomo/releases/download/v1.19.29/mihomo-linux-amd64-v1.19.29.gz
+          echo "60de76a35a6cbf7b4fa4a20f5c257c24345d1d635ab1aa3877022a1997ef413c  $RUNNER_TEMP/mihomo.gz" | sha256sum --check
+          gzip -dc "$RUNNER_TEMP/mihomo.gz" > "$RUNNER_TEMP/mihomo"
+          chmod 700 "$RUNNER_TEMP/mihomo"
       - name: Build and sign changed data
         env:
           RULE_SIGNING_KEY: ${{ secrets.RULE_SIGNING_KEY }}
@@ -33,7 +41,7 @@ jobs:
           printf '%s' "$RULE_SIGNING_KEY" > "$signing_key"
           unset RULE_SIGNING_KEY
           openssl pkey -in "$signing_key" -pubout | cmp - public-key.pem
-          python3 publish.py --key "$signing_key"
+          python3 publish.py --key "$signing_key" --core "$RUNNER_TEMP/mihomo"
       - name: Publish complete snapshot
         shell: bash
         run: |

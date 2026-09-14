@@ -1,5 +1,6 @@
 import unittest
 from publish import read_payload, encode, bump, version_tuple
+from review import review_changes, review_routes
 
 
 class RuleValidationTests(unittest.TestCase):
@@ -17,6 +18,14 @@ class RuleValidationTests(unittest.TestCase):
         ]:
             with self.subTest(text=text), self.assertRaises((ValueError, SyntaxError)):
                 read_payload(text, behavior)
+
+    def test_equal_count_mass_replacement_is_blocked(self):
+        old = {'cn.yaml': [f'old{i}.example' for i in range(100)]}
+        candidate = {'cn.yaml': [f'new{i}.example' for i in range(100)]}
+        with self.assertRaisesRegex(ValueError, 'excessive content replacement'):
+            review_changes(candidate, old, {'cn.yaml'})
+        candidate['cn.yaml'] = old['cn.yaml'][:-1] + ['reviewed.example']
+        self.assertIn('| 1 | 1 |', review_changes(candidate, old, {'cn.yaml'}))
 
     def test_roundtrip_and_version_order(self):
         self.assertEqual(read_payload(encode([]), 'packages'), [])
@@ -44,6 +53,7 @@ class PublisherTransactionTests(unittest.TestCase):
             root = Path(temporary)
             (root / 'lists').mkdir()
             shutil.copytree(publish.ROOT / 'baseline', root / 'baseline')
+            shutil.copy(publish.ROOT / 'review-cases.json', root / 'review-cases.json')
             key = root / 'private.pem'
             subprocess.run(['openssl', 'genpkey', '-algorithm', 'ED25519', '-out', str(key)], check=True, capture_output=True)
             subprocess.run(['openssl', 'pkey', '-in', str(key), '-pubout', '-out', str(root / 'public-key.pem')], check=True, capture_output=True)
@@ -53,9 +63,18 @@ class PublisherTransactionTests(unittest.TestCase):
                        'proxy.txt': ['+.google.com', '+.youtube.com', '+.facebook.com'],
                        'gfw.txt': ['+.google.com', '+.youtube.com', '+.facebook.com'],
                        'cncidr.txt': ['1.1.1.0/24']}
+            cases = json.loads((root / 'review-cases.json').read_text())
+            sources['direct.txt'] = ['+.' + domain for domain in cases['direct']]
+            sources['proxy.txt'] = ['+.' + domain for domain in cases['proxy']]
+            sources['gfw.txt'] = list(sources['proxy.txt'])
+            original_proxy = list(sources['proxy.txt'])
             with patch.object(publish, 'ROOT', root), patch.object(publish, 'fetch', side_effect=lambda url: encode(sources[url.rsplit('/', 1)[-1]])):
                 publish.build(key, 'a' * 40)
                 first = (root / 'latest/version.json').read_bytes()
+                with patch.object(publish, 'review_core', side_effect=ValueError('injected core rejection')):
+                    with self.assertRaisesRegex(ValueError, 'injected core rejection'):
+                        publish.build(key, 'a' * 40, core=root / 'core')
+                self.assertEqual(first, (root / 'latest/version.json').read_bytes())
                 publish.build(key, 'b' * 40)
                 self.assertEqual(first, (root / 'latest/version.json').read_bytes())
                 (root / 'lists/direct-apps.json').write_text(json.dumps({'version': '1.0.0', 'packages': ['com.tencent.mm', 'com.test.app']}))
@@ -63,11 +82,11 @@ class PublisherTransactionTests(unittest.TestCase):
                 manifest = json.loads((root / 'latest/manifest.json').read_text())
                 self.assertEqual(manifest['componentVersions'], {'rules': '2.0.0', 'directApps': '1.0.1', 'proxyApps': '1.0.0'})
                 good = (root / 'latest/version.json').read_bytes()
-                sources['proxy.txt'] = ['+.google.com', '+.youtube.com', '+.qq.com']
-                with self.assertRaisesRegex(ValueError, 'direct canary unexpectedly proxied'):
+                sources['proxy.txt'] = original_proxy[:-1] + ['+.qq.com']
+                with self.assertRaisesRegex(ValueError, 'route expectation mismatch'):
                     publish.build(key, 'b' * 40)
                 self.assertEqual(good, (root / 'latest/version.json').read_bytes())
-                sources['proxy.txt'] = ['+.google.com', '+.youtube.com', '+.facebook.com']
+                sources['proxy.txt'] = original_proxy
                 (root / 'lists/direct-apps.json').write_text(json.dumps({'version': '1.0.0', 'packages': ['com.tencent.mm', 'com.test.app', 'com.test.second']}))
                 real_write = Path.write_text
                 def fail_candidate_write(path, *args, **kwargs):
