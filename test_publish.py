@@ -7,6 +7,7 @@ class RuleValidationTests(unittest.TestCase):
         for text, behavior in [
             ('payload:\n - example.com\nrules:\n - MATCH,DIRECT', 'domain'),
             ('payload:\n - "*"', 'domain'),
+            ('payload:\n - "*.*"', 'domain'),
             ('payload:\n - "+.com"', 'domain'),
             ('payload:\n - 0.0.0.0/0', 'ipcidr'),
             ('payload:\n - 192.168.1.1/8', 'ipcidr'),
@@ -18,12 +19,16 @@ class RuleValidationTests(unittest.TestCase):
                 read_payload(text, behavior)
 
     def test_roundtrip_and_version_order(self):
+        self.assertEqual(read_payload(encode([]), 'packages'), [])
         for values, behavior in [(['+.example.com', '+.youtube'], 'domain'),
                                  (['1.1.1.0/24'], 'ipcidr'),
                                  (['com.tencent.mm', 'org.telegram.messenger'], 'packages')]:
             self.assertEqual(read_payload(encode(values), behavior), sorted(values))
         self.assertEqual(bump('2.0.9'), '2.0.10')
         self.assertGreater(version_tuple('2.0.10'), version_tuple('2.0.9'))
+        for version in ['01.0.0', '1.0.' + '9' * 100, '1.0.-1']:
+            with self.assertRaises(ValueError):
+                version_tuple(version)
 
 
 class PublisherTransactionTests(unittest.TestCase):
@@ -58,6 +63,27 @@ class PublisherTransactionTests(unittest.TestCase):
                 manifest = json.loads((root / 'latest/manifest.json').read_text())
                 self.assertEqual(manifest['componentVersions'], {'rules': '2.0.0', 'directApps': '1.0.1', 'proxyApps': '1.0.0'})
                 good = (root / 'latest/version.json').read_bytes()
+                sources['proxy.txt'] = ['+.google.com', '+.youtube.com', '+.qq.com']
+                with self.assertRaisesRegex(ValueError, 'direct canary unexpectedly proxied'):
+                    publish.build(key, 'b' * 40)
+                self.assertEqual(good, (root / 'latest/version.json').read_bytes())
+                sources['proxy.txt'] = ['+.google.com', '+.youtube.com', '+.facebook.com']
+                (root / 'lists/direct-apps.json').write_text(json.dumps({'version': '1.0.0', 'packages': ['com.tencent.mm', 'com.test.app', 'com.test.second']}))
+                real_write = Path.write_text
+                def fail_candidate_write(path, *args, **kwargs):
+                    if path.parent.name == 'complete' and path.name == 'gfw.yaml':
+                        raise OSError('injected disk failure')
+                    return real_write(path, *args, **kwargs)
+                with patch.object(Path, 'write_text', fail_candidate_write), self.assertRaises(OSError):
+                    publish.build(key, 'b' * 40)
+                self.assertFalse((root / 'snapshots/2.0.2').exists())
+                self.assertEqual(good, (root / 'latest/version.json').read_bytes())
+                publish.build(key, 'b' * 40)
+                (root / 'lists/direct-apps.json').write_text(json.dumps({'version': '1.0.0', 'packages': []}))
+                publish.build(key, 'b' * 40)
+                self.assertEqual((root / 'latest/direct_apps.yaml').read_text(), 'payload: []\n')
+                good = (root / 'latest/version.json').read_bytes()
+                (root / 'lists/direct-apps.json').write_text(json.dumps({'version': '1.0.0', 'packages': ['com.tencent.mm']}))
                 (root / 'lists/proxy-apps.json').write_text(json.dumps({'version': '1.0.1', 'packages': ['com.tencent.mm']}))
                 with self.assertRaises(ValueError):
                     publish.build(key, 'b' * 40)

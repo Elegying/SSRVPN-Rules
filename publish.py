@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import fnmatch
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent
@@ -20,7 +21,7 @@ SOURCES = {'cn.yaml': 'direct.txt', 'gfw.yaml': 'gfw.txt',
            'foreign_services.yaml': 'proxy.txt', 'company_asn.yaml': 'cncidr.txt'}
 PACKAGE = re.compile(r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+')
 DOMAIN = re.compile(r'(?:\+\.)?[a-z0-9_*?][a-z0-9._*?+-]*')
-VERSION = re.compile(r'\d+\.\d+\.\d+')
+VERSION = re.compile(r'(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})')
 # Common browsers must follow destination rules. Review this list alongside additions.
 BROWSERS = {'com.android.chrome', 'com.chrome.beta', 'com.chrome.dev', 'com.chrome.canary',
  'com.google.android.apps.chrome', 'com.microsoft.emmx', 'org.mozilla.firefox',
@@ -42,6 +43,8 @@ def fetch(url):
 def read_payload(text, behavior):
     if len(text.encode()) > LIMIT:
         raise ValueError('payload too large')
+    if behavior == 'packages' and text.strip() == 'payload: []':
+        return []
     values = []
     for line in text.splitlines():
         line = line.strip()
@@ -56,7 +59,7 @@ def read_payload(text, behavior):
             raise ValueError('invalid payload')
         if behavior == 'domain':
             value = value.lower()
-            if not DOMAIN.fullmatch(value) or value in {'*', '+.*', '+.com', '+.net', '+.org'}:
+            if not DOMAIN.fullmatch(value) or not re.search('[a-z0-9]', value) or value in {'*', '+.*', '+.com', '+.net', '+.org'}:
                 raise ValueError(f'invalid domain: {value}')
         elif behavior == 'ipcidr':
             network = ipaddress.ip_network(value, strict=True)
@@ -72,14 +75,28 @@ def read_payload(text, behavior):
 
 
 def encode(values):
+    if not values:
+        return 'payload: []\n'
     return 'payload:\n' + ''.join('  - ' + json.dumps(value) + '\n' for value in values)
+
+
+def sync_latest(snapshot):
+    latest = ROOT / 'latest'
+    latest.mkdir(exist_ok=True)
+    # Index last: readers always use its immutable snapshot, never mixed latest payloads.
+    for file in sorted(snapshot.iterdir(), key=lambda p: p.name == 'version.json'):
+        temporary = latest / (file.name + '.tmp')
+        temporary.write_bytes(file.read_bytes())
+        os.replace(temporary, latest / file.name)
 
 
 def bump(version):
     if not VERSION.fullmatch(version):
         raise ValueError('invalid version')
     major, minor, patch = map(int, version.split('.'))
-    return f'{major}.{minor}.{patch + 1}'
+    updated = f'{major}.{minor}.{patch + 1}'
+    version_tuple(updated)
+    return updated
 
 
 def version_tuple(version):
@@ -90,7 +107,16 @@ def version_tuple(version):
 
 def build(key, upstream_commit=None):
     latest = ROOT / 'latest'
-    previous = json.loads((latest / 'manifest.json').read_text()) if (latest / 'manifest.json').exists() else None
+    previous = None
+    previous_snapshot = None
+    if (latest / 'version.json').exists():
+        descriptor = json.loads((latest / 'version.json').read_text())
+        version_tuple(descriptor['version'])
+        previous_snapshot = ROOT / 'snapshots' / descriptor['version']
+        manifest_bytes = (previous_snapshot / 'manifest.json').read_bytes()
+        if hashlib.sha256(manifest_bytes).hexdigest() != descriptor['manifestSha256']:
+            raise ValueError('previous snapshot manifest mismatch')
+        previous = json.loads(manifest_bytes)
     old_entries = {e['name']: e for e in previous['files']} if previous else {}
     commit = upstream_commit or json.loads(fetch(f'https://api.github.com/repos/{UPSTREAM}/commits/release'))['sha']
     if not re.fullmatch('[0-9a-f]{40}', commit):
@@ -108,7 +134,8 @@ def build(key, upstream_commit=None):
         payloads[name] = values
     # Semantic canaries are checked before signing, not merely YAML syntax.
     def matches(domain, values):
-        return any(domain == v.removeprefix('+.') or domain.endswith('.' + v.removeprefix('+.')) for v in values)
+        return any(fnmatch.fnmatchcase(domain, v.removeprefix('+.')) or
+                   (v.startswith('+.') and fnmatch.fnmatchcase(domain, '*.' + v[2:])) for v in values)
     for domain in ['google.com', 'youtube.com', 'facebook.com']:
         if not matches(domain, payloads['gfw.yaml']) and not matches(domain, payloads['foreign_services.yaml']):
             raise ValueError('proxy canary missing')
@@ -117,6 +144,10 @@ def build(key, upstream_commit=None):
     for domain in ['baidu.com', 'qq.com', 'taobao.com']:
         if not matches(domain, payloads['cn.yaml']):
             raise ValueError('direct canary missing')
+        if any(matches(domain, payloads[name]) for name in [
+            'gfw.yaml', 'foreign_services.yaml', 'ai_services.yaml',
+            'streaming_services.yaml', 'user_feedback_rules.yaml']):
+            raise ValueError('direct canary unexpectedly proxied')
     components = dict(previous['componentVersions']) if previous else {'rules': '2.0.0', 'directApps': '1.0.0', 'proxyApps': '1.0.0'}
     for stem, component, filename in [('direct-apps', 'directApps', 'direct_apps.yaml'), ('proxy-apps', 'proxyApps', 'proxy_apps.yaml')]:
         data = json.loads((ROOT / 'lists' / (stem + '.json')).read_text())
@@ -141,6 +172,7 @@ def build(key, upstream_commit=None):
         if changed - {'direct_apps.yaml', 'proxy_apps.yaml'}:
             components['rules'] = bump(components['rules'])
         if not changed:
+            sync_latest(previous_snapshot)
             print('No content changes; keep published snapshot.')
             return
     version = bump(previous['version']) if previous else '2.0.0'
@@ -162,11 +194,18 @@ def build(key, upstream_commit=None):
     if any(len(text.encode()) > LIMIT for text in contents.values()):
         raise ValueError('encoded data exceeds size limit')
     snapshot = ROOT / 'snapshots' / version
-    snapshot.mkdir(parents=True, exist_ok=False)
-    latest.mkdir(exist_ok=True)
-    for name, text in contents.items():
-        (snapshot / name).write_text(text)
-        (latest / name).write_text(text)
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    if snapshot.exists():
+        if any((snapshot / name).read_text() != text for name, text in contents.items()):
+            raise ValueError('refusing to overwrite immutable snapshot')
+    else:
+        with tempfile.TemporaryDirectory(dir=snapshot.parent) as temporary:
+            staged = Path(temporary) / 'complete'
+            staged.mkdir()
+            for name, text in contents.items():
+                (staged / name).write_text(text)
+            staged.rename(snapshot)
+    sync_latest(snapshot)
     print(f'Prepared signed snapshot {version}: {len(changed)} changed files.')
 
 

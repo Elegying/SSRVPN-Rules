@@ -5,7 +5,7 @@ on:
     - cron: '17 1 * * *'
   push:
     branches: [main]
-    paths: ['lists/**', 'baseline/**', 'publish.py', 'test_publish.py', '.github/workflows/update.yml']
+    paths: ['lists/**', 'baseline/**', 'publish.py', 'test_publish.py', 'public-key.pem', '.github/workflows/update.yml']
 permissions:
   contents: write
 concurrency:
@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
       - name: Validate publisher
         run: python3 -m unittest test_publish
       - name: Build and sign changed data
