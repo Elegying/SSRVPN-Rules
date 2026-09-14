@@ -30,6 +30,7 @@ jobs:
           trap 'rm -f "$signing_key"' EXIT
           printf '%s' "$RULE_SIGNING_KEY" > "$signing_key"
           unset RULE_SIGNING_KEY
+          openssl pkey -in "$signing_key" -pubout | cmp - public-key.pem
           python3 publish.py --key "$signing_key"
       - name: Publish complete snapshot
         shell: bash
