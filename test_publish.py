@@ -4,6 +4,17 @@ from review import review_changes, review_routes
 
 
 class RuleValidationTests(unittest.TestCase):
+    def test_route_review_preserves_exact_suffix_and_wildcard_matching(self):
+        payloads = {name: [] for name in ['gfw.yaml', 'foreign_services.yaml',
+                    'ai_services.yaml', 'streaming_services.yaml',
+                    'user_feedback_rules.yaml', 'cn.yaml', 'china_domains.yaml']}
+        payloads['cn.yaml'] = ['+.example.cn', 'exact.cn', '+.cdn?.wild.cn']
+        payloads['gfw.yaml'] = ['+.blocked.example', 'api*.foreign.example']
+        cases = {'direct': ['example.cn', 'a.example.cn', 'exact.cn', 'cdn1.wild.cn', 'a.cdn2.wild.cn'],
+                 'proxy': ['blocked.example', 'a.blocked.example', 'api.foreign.example', 'api123.foreign.example'],
+                 'unknown': ['child.exact.cn', 'example.cn.evil.test', 'cdn12.wild.cn']}
+        self.assertEqual(review_routes(payloads, cases), 12)
+
     def test_rejects_injected_configuration_and_catchalls(self):
         for text, behavior in [
             ('payload:\n - example.com\nrules:\n - MATCH,DIRECT', 'domain'),
@@ -41,6 +52,28 @@ class RuleValidationTests(unittest.TestCase):
 
 
 class PublisherTransactionTests(unittest.TestCase):
+    def test_core_review_cannot_be_omitted(self):
+        import publish
+        with self.assertRaises(TypeError):
+            publish.build(None, 'a' * 40)
+
+    def test_core_configuration_includes_application_rules(self):
+        import json
+        from pathlib import Path
+        from unittest.mock import patch
+        from review import review_core
+        contents = {'direct_apps.yaml': encode(['com.tencent.mm']),
+                    'proxy_apps.yaml': encode(['org.telegram.messenger'])}
+        entries = [{'name': name, 'behavior': 'packages', 'count': 1} for name in contents]
+        def inspect(command, **kwargs):
+            config = json.loads(Path(command[command.index('-f') + 1]).read_text())
+            self.assertIn('PROCESS-NAME,com.tencent.mm,REJECT', config['rules'])
+            self.assertIn('PROCESS-NAME,org.telegram.messenger,REJECT', config['rules'])
+            raise RuntimeError('checked configuration before process start')
+        with patch('review.subprocess.run', side_effect=inspect):
+            with self.assertRaisesRegex(RuntimeError, 'checked configuration'):
+                review_core(Path('/unused/core'), contents, entries)
+
     def test_versions_conflicts_and_failure_preserve_previous_publication(self):
         import json
         from pathlib import Path
@@ -68,23 +101,24 @@ class PublisherTransactionTests(unittest.TestCase):
             sources['proxy.txt'] = ['+.' + domain for domain in cases['proxy']]
             sources['gfw.txt'] = list(sources['proxy.txt'])
             original_proxy = list(sources['proxy.txt'])
-            with patch.object(publish, 'ROOT', root), patch.object(publish, 'fetch', side_effect=lambda url: encode(sources[url.rsplit('/', 1)[-1]])):
-                publish.build(key, 'a' * 40)
+            with patch.object(publish, 'ROOT', root), patch.object(publish, 'fetch', side_effect=lambda url: encode(sources[url.rsplit('/', 1)[-1]])), patch.object(publish, 'review_core') as core_review:
+                publish.build(key, 'a' * 40, core=root / 'core')
+                core_review.assert_called_once()
                 first = (root / 'latest/version.json').read_bytes()
                 with patch.object(publish, 'review_core', side_effect=ValueError('injected core rejection')):
                     with self.assertRaisesRegex(ValueError, 'injected core rejection'):
                         publish.build(key, 'a' * 40, core=root / 'core')
                 self.assertEqual(first, (root / 'latest/version.json').read_bytes())
-                publish.build(key, 'b' * 40)
+                publish.build(key, 'b' * 40, core=root / 'core')
                 self.assertEqual(first, (root / 'latest/version.json').read_bytes())
                 (root / 'lists/direct-apps.json').write_text(json.dumps({'version': '1.0.0', 'packages': ['com.tencent.mm', 'com.test.app']}))
-                publish.build(key, 'b' * 40)
+                publish.build(key, 'b' * 40, core=root / 'core')
                 manifest = json.loads((root / 'latest/manifest.json').read_text())
                 self.assertEqual(manifest['componentVersions'], {'rules': '2.0.0', 'directApps': '1.0.1', 'proxyApps': '1.0.0'})
                 good = (root / 'latest/version.json').read_bytes()
                 sources['proxy.txt'] = original_proxy[:-1] + ['+.qq.com']
                 with self.assertRaisesRegex(ValueError, 'route expectation mismatch'):
-                    publish.build(key, 'b' * 40)
+                    publish.build(key, 'b' * 40, core=root / 'core')
                 self.assertEqual(good, (root / 'latest/version.json').read_bytes())
                 sources['proxy.txt'] = original_proxy
                 (root / 'lists/direct-apps.json').write_text(json.dumps({'version': '1.0.0', 'packages': ['com.tencent.mm', 'com.test.app', 'com.test.second']}))
@@ -94,18 +128,18 @@ class PublisherTransactionTests(unittest.TestCase):
                         raise OSError('injected disk failure')
                     return real_write(path, *args, **kwargs)
                 with patch.object(Path, 'write_text', fail_candidate_write), self.assertRaises(OSError):
-                    publish.build(key, 'b' * 40)
+                    publish.build(key, 'b' * 40, core=root / 'core')
                 self.assertFalse((root / 'snapshots/2.0.2').exists())
                 self.assertEqual(good, (root / 'latest/version.json').read_bytes())
-                publish.build(key, 'b' * 40)
+                publish.build(key, 'b' * 40, core=root / 'core')
                 (root / 'lists/direct-apps.json').write_text(json.dumps({'version': '1.0.0', 'packages': []}))
-                publish.build(key, 'b' * 40)
+                publish.build(key, 'b' * 40, core=root / 'core')
                 self.assertEqual((root / 'latest/direct_apps.yaml').read_text(), 'payload: []\n')
                 good = (root / 'latest/version.json').read_bytes()
                 (root / 'lists/direct-apps.json').write_text(json.dumps({'version': '1.0.0', 'packages': ['com.tencent.mm']}))
                 (root / 'lists/proxy-apps.json').write_text(json.dumps({'version': '1.0.1', 'packages': ['com.tencent.mm']}))
                 with self.assertRaises(ValueError):
-                    publish.build(key, 'b' * 40)
+                    publish.build(key, 'b' * 40, core=root / 'core')
                 self.assertEqual(good, (root / 'latest/version.json').read_bytes())
 
 if __name__ == '__main__':

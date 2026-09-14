@@ -105,7 +105,7 @@ def version_tuple(version):
     return tuple(map(int, version.split('.')))
 
 
-def build(key, upstream_commit=None, core=None):
+def build(key, upstream_commit=None, *, core):
     latest = ROOT / 'latest'
     previous = None
     previous_snapshot = None
@@ -156,9 +156,8 @@ def build(key, upstream_commit=None, core=None):
         previous_payloads[name] = read_payload(old_text, entry['behavior'])
     write_report('## Candidate rule review\nSource commit: `' + commit + '`')
     write_report(review_changes(payloads, previous_payloads, SOURCES))
-    if core is not None:
-        review_core(core, contents, entries)
-        write_report('Core syntax and every provider count: PASS')
+    review_core(core, contents, entries)
+    write_report('Core syntax and every provider count: PASS')
     changed = {e['name'] for e in entries if e['sha256'] != old_entries.get(e['name'], {}).get('sha256')}
     if previous:
         for component, filename in [('directApps', 'direct_apps.yaml'), ('proxyApps', 'proxy_apps.yaml')]:
@@ -214,7 +213,7 @@ if __name__ == '__main__':
     parser.add_argument('--core', required=True, type=Path)
     args = parser.parse_args()
     try:
-        build(args.key, args.upstream_commit, args.core)
+        build(args.key, args.upstream_commit, core=args.core)
     except Exception as error:
         write_report(f'Rule review/publication FAILED: {type(error).__name__}: {error}')
         raise

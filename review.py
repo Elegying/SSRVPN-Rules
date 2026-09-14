@@ -11,9 +11,18 @@ import urllib.request
 
 
 def review_routes(payloads, cases):
+    def rule_matches(domain, value):
+        suffix = value.startswith('+.')
+        pattern = value[2:] if suffix else value
+        # Most providers contain literal domains. Avoid repeatedly compiling
+        # 100k+ literals through fnmatch's bounded regex cache for each case.
+        if '*' not in pattern and '?' not in pattern:
+            return domain == pattern or (suffix and domain.endswith('.' + pattern))
+        return fnmatch.fnmatchcase(domain, pattern) or (
+            suffix and fnmatch.fnmatchcase(domain, '*.' + pattern))
+
     def matches(domain, names):
-        return any(fnmatch.fnmatchcase(domain, value.removeprefix('+.')) or
-                   (value.startswith('+.') and fnmatch.fnmatchcase(domain, '*.' + value[2:]))
+        return any(rule_matches(domain, value)
                    for name in names for value in payloads[name])
     proxy = ['gfw.yaml', 'foreign_services.yaml', 'ai_services.yaml',
              'streaming_services.yaml', 'user_feedback_rules.yaml']
@@ -57,13 +66,18 @@ def review_core(core, contents, entries):
         providers = {e['name']: {'type': 'file', 'behavior': e['behavior'], 'format': 'yaml',
                                 'path': str(root / e['name'])}
                      for e in entries if e['behavior'] != 'packages'}
+        application_rules = [
+            f'PROCESS-NAME,{json.loads(line[4:])},REJECT'
+            for entry in entries if entry['behavior'] == 'packages'
+            for line in contents[entry['name']].splitlines() if line.startswith('  - ')
+        ]
         # Reject rules avoid any real outbound traffic; this gate checks loading,
         # not whether a public site happens to be reachable on the runner.
         config = {'mode': 'rule', 'external-controller': f'127.0.0.1:{api}',
                   'secret': 'isolated-rule-review', 'ipv6': False,
                   'dns': {'enable': False}, 'tun': {'enable': False},
                   'rule-providers': providers,
-                  'rules': [f'RULE-SET,{name},REJECT' for name in providers] + ['MATCH,REJECT']}
+                  'rules': application_rules + [f'RULE-SET,{name},REJECT' for name in providers] + ['MATCH,REJECT']}
         (root / 'config.json').write_text(json.dumps(config))
         command = [str(Path(core).resolve()), '-d', folder, '-f', str(root / 'config.json')]
         subprocess.run([*command, '-t'], check=True, timeout=30, capture_output=True)
