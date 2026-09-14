@@ -1,0 +1,43 @@
+name: Publish verified rule snapshots
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 1 * * *'
+  push:
+    branches: [main]
+    paths: ['lists/**', 'baseline/**', 'publish.py', 'test_publish.py', '.github/workflows/update.yml']
+permissions:
+  contents: write
+concurrency:
+  group: rules-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Validate publisher
+        run: python3 -m unittest test_publish
+      - name: Build and sign changed data
+        env:
+          RULE_SIGNING_KEY: ${{ secrets.RULE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          signing_key="$(mktemp)"
+          trap 'rm -f "$signing_key"' EXIT
+          printf '%s' "$RULE_SIGNING_KEY" > "$signing_key"
+          unset RULE_SIGNING_KEY
+          python3 publish.py --key "$signing_key"
+      - name: Publish complete snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add latest snapshots
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Update verified routing data'
+          git push origin HEAD:main

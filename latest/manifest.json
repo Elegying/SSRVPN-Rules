@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "version": "2.0.0",
+  "componentVersions": {
+    "rules": "2.0.0",
+    "directApps": "1.0.0",
+    "proxyApps": "1.0.0"
+  },
+  "upstream": {
+    "repository": "Loyalsoldier/clash-rules",
+    "commit": "bfa77fb0987d2ab0d56b5b01b3fa36515a57326c"
+  },
+  "files": [
+    {
+      "name": "ai_services.yaml",
+      "behavior": "domain",
+      "count": 69,
+      "sha256": "a49ba17cde801dc056f6e9600b5f736b2aecfce46d61183ccaa4fce58b096be0"
+    },
+    {
+      "name": "china_domains.yaml",
+      "behavior": "domain",
+      "count": 2977,
+      "sha256": "3b15e558feaaa49a25ac03101e526a943728676a68f14eb9ef691d067320ba7f"
+    },
+    {
+      "name": "cn.yaml",
+      "behavior": "domain",
+      "count": 111160,
+      "sha256": "5ff6ec43b09fa35c17ed98b5fa4c26cd2dbb7dab33ccb4c579986c8e6e8531d8"
+    },
+    {
+      "name": "company_asn.yaml",
+      "behavior": "ipcidr",
+      "count": 9647,
+      "sha256": "7d7b50815f42f9a6274e2df67288dadee6af55722ef13cb9d2562e67108b63ce"
+    },
+    {
+      "name": "direct_apps.yaml",
+      "behavior": "packages",
+      "count": 182,
+      "sha256": "e3970af7a1f910721a6f5fe553e59dd8d32c90bf54120e3ecfe5ad6092e065c8"
+    },
+    {
+      "name": "foreign_services.yaml",
+      "behavior": "domain",
+      "count": 27088,
+      "sha256": "ba5ba1a9854bcd9141afcd83250fcbce9338c40cdb85824cc5b0bf867c0364d3"
+    },
+    {
+      "name": "gfw.yaml",
+      "behavior": "domain",
+      "count": 4384,
+      "sha256": "a2bb7f78d3fdfdc08bc876d7494b13ff20d144d61c5b4642b51bd3ba12873b11"
+    },
+    {
+      "name": "proxy_apps.yaml",
+      "behavior": "packages",
+      "count": 32,
+      "sha256": "6479dbba40c649fc20d86b0eaa225e7355da99585f3d5d175a87d98b147d0513"
+    },
+    {
+      "name": "streaming_services.yaml",
+      "behavior": "domain",
+      "count": 301,
+      "sha256": "951e9df895bc583d6cdd89767f3064c01f279df949103286bf801a274f7b47c7"
+    },
+    {
+      "name": "user_feedback_rules.yaml",
+      "behavior": "domain",
+      "count": 2,
+      "sha256": "c7211a8e5b29abe0b7dd1a36ee56e55c548763d0a962837b5cfaa181cfb1713b"
+    }
+  ]
+}
