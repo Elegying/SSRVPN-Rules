@@ -20,7 +20,7 @@ jobs:
         with:
           ref: main
       - name: Validate publisher
-        run: python3 -m unittest test_publish
+        run: env -u GITHUB_STEP_SUMMARY python3 -m unittest test_publish
       - name: Prepare pinned compatibility core
         shell: bash
         run: |
