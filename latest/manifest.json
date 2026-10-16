@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
-  "version": "2.0.19",
+  "version": "2.0.20",
   "componentVersions": {
-    "rules": "2.0.18",
+    "rules": "2.0.19",
     "directApps": "1.0.1",
     "proxyApps": "1.0.1"
   },
   "upstream": {
     "repository": "Loyalsoldier/clash-rules",
-    "commit": "650078a2e693f38a3e792b62e1e63d9aa632af2a"
+    "commit": "1daca9c98b33e73ae9bb2260115f73970c6817d1"
   },
   "files": [
     {
@@ -26,14 +26,14 @@
     {
       "name": "cn.yaml",
       "behavior": "domain",
-      "count": 110614,
-      "sha256": "321bf7cb93e9fcfef9fbbd51e78259d767b100d5bdb743e8d037735a7307ce71"
+      "count": 110560,
+      "sha256": "cdf275e8005e2eeac799e5c7f05964ab5756704197ea1b8f705d13cbe7f8825d"
     },
     {
       "name": "company_asn.yaml",
       "behavior": "ipcidr",
-      "count": 9609,
-      "sha256": "c794c3262b3f2f4cdfa78523be69789d1d2302d945562379c607beace7ea8041"
+      "count": 10009,
+      "sha256": "9695c16066cb29b4c7c225fd0abc44d920614a516cb54d31d082474fe8557141"
     },
     {
       "name": "direct_apps.yaml",
@@ -44,8 +44,8 @@
     {
       "name": "foreign_services.yaml",
       "behavior": "domain",
-      "count": 27233,
-      "sha256": "aea3b78634c9f1010bea1f555908ff722d74c208e43dd958f98596b82a7168fa"
+      "count": 27238,
+      "sha256": "4699e6740256fac867739b51b3457cdd80f9cb7b3ad6c7c6b732d45d1c380c1c"
     },
     {
       "name": "gfw.yaml",
