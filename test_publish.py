@@ -51,6 +51,145 @@ class RuleValidationTests(unittest.TestCase):
                 version_tuple(version)
 
 
+class CoreReadinessTests(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import patch
+        self.mocks = {}
+        for name in ['subprocess.run', 'subprocess.Popen', 'socket.socket',
+                     'urllib.request.build_opener', 'time.sleep']:
+            patcher = patch('review.' + name)
+            self.mocks[name] = patcher.start()
+            self.addCleanup(patcher.stop)
+        self.process = self.mocks['subprocess.Popen'].return_value
+        self.process.poll.return_value = None
+        self.mocks['socket.socket'].return_value.__enter__.return_value.getsockname.return_value = (
+            '127.0.0.1', 12345)
+        self.opener = self.mocks['urllib.request.build_opener'].return_value
+        self.sleep = self.mocks['time.sleep']
+        self.contents = {'domains.yaml': encode(['+.example.com']),
+                         'networks.yaml': encode(['1.1.1.0/24', '8.8.8.0/24']),
+                         'direct_apps.yaml': encode(['com.tencent.mm'])}
+        self.entries = [
+            {'name': 'domains.yaml', 'behavior': 'domain', 'count': 1},
+            {'name': 'networks.yaml', 'behavior': 'ipcidr', 'count': 2},
+            {'name': 'direct_apps.yaml', 'behavior': 'packages', 'count': 1},
+        ]
+        self.ready = {'providers': {'domains.yaml': {'ruleCount': 1},
+                                    'networks.yaml': {'ruleCount': 2}}}
+
+    def set_responses(self, responses):
+        import io
+        import json
+        self.opener.open.side_effect = [
+            response if isinstance(response, Exception) else io.StringIO(json.dumps(response))
+            for response in responses]
+
+    def review(self):
+        from review import review_core
+        return review_core('/unused/core', self.contents, self.entries)
+
+    def assert_attempts(self, attempts, sleeps):
+        from unittest.mock import call
+        self.assertEqual(self.opener.open.call_count, attempts)
+        self.assertEqual(self.sleep.call_args_list, [call(.1)] * sleeps)
+        self.assertEqual(self.process.poll.call_count, attempts)
+        for call_args in self.opener.open.call_args_list:
+            self.assertEqual(call_args.kwargs['timeout'], .5)
+            request = call_args.args[0]
+            self.assertEqual(request.full_url, 'http://127.0.0.1:12345/providers/rules')
+            self.assertEqual(request.get_header('Authorization'), 'Bearer isolated-rule-review')
+        self.process.terminate.assert_called_once_with()
+        self.process.wait.assert_called_once_with(timeout=5)
+        self.process.kill.assert_not_called()
+
+    def test_null_providers_are_retried_until_ready(self):
+        self.set_responses([{'providers': None}, self.ready])
+        self.assertIsNone(self.review())
+        self.assert_attempts(2, 1)
+
+    def test_empty_providers_are_not_ready(self):
+        self.set_responses([{'providers': {}}, self.ready])
+        self.review()
+        self.assert_attempts(2, 1)
+
+    def test_partial_providers_require_matching_counts_in_same_response(self):
+        self.set_responses([
+            {'providers': {'domains.yaml': {'ruleCount': 1}}},
+            {'providers': {'networks.yaml': {'ruleCount': 2}}},
+            {'providers': {'domains.yaml': {'ruleCount': 1}, 'networks.yaml': {'ruleCount': 1}}},
+            self.ready,
+        ])
+        self.review()
+        self.assert_attempts(4, 3)
+
+    def test_complete_providers_pass_immediately(self):
+        self.set_responses([self.ready])
+        self.review()
+        self.assert_attempts(1, 0)
+        self.mocks['subprocess.run'].assert_called_once()
+        self.assertEqual(self.mocks['subprocess.run'].call_args.args[0][-1], '-t')
+
+    def test_malformed_response_shapes_are_retried(self):
+        invalid = [None, [], 'loading', 0, {},
+                   *({'providers': value} for value in [[], 'loading', 0, False]),
+                   *({'providers': {'domains.yaml': value}} for value in [None, [], 'loading', 0]),
+                   *({'providers': {'domains.yaml': {'ruleCount': value},
+                                    'networks.yaml': {'ruleCount': 2}}}
+                     for value in [None, '1', True, 1.0])]
+        for response in invalid:
+            with self.subTest(response=response):
+                self.opener.open.reset_mock()
+                self.sleep.reset_mock()
+                self.process.reset_mock()
+                self.set_responses([response, self.ready])
+                self.review()
+                self.assert_attempts(2, 1)
+
+    def test_unready_providers_exhaust_retry_limit_and_fail_closed(self):
+        invalid = [None, {'providers': None}, {'providers': {}},
+                   {'providers': {'domains.yaml': {'ruleCount': 1}}},
+                   {'providers': {'domains.yaml': None}},
+                   {'providers': {'domains.yaml': {'ruleCount': 1},
+                                  'networks.yaml': {'ruleCount': 3}}}]
+        for response in invalid:
+            with self.subTest(response=response):
+                self.opener.open.reset_mock()
+                self.sleep.reset_mock()
+                self.process.reset_mock()
+                self.set_responses([response] * 100)
+                with self.assertRaisesRegex(ValueError, 'core provider load/count mismatch'):
+                    self.review()
+                self.assert_attempts(100, 100)
+
+    def test_transient_request_and_json_errors_are_retried(self):
+        import json
+        self.set_responses([OSError('not listening yet'),
+                            json.JSONDecodeError('incomplete response', '', 0), self.ready])
+        self.review()
+        self.assert_attempts(3, 2)
+
+    def test_core_exit_stops_polling_and_cleans_up(self):
+        self.process.poll.return_value = 1
+        with self.assertRaisesRegex(ValueError, 'core exited before providers became ready'):
+            self.review()
+        self.opener.open.assert_not_called()
+        self.sleep.assert_not_called()
+        self.process.terminate.assert_called_once_with()
+        self.process.wait.assert_called_once_with(timeout=5)
+
+    def test_timeout_kills_core_if_termination_does_not_finish(self):
+        import subprocess
+        from unittest.mock import call
+        self.set_responses([{'providers': None}] * 100)
+        self.process.wait.side_effect = [subprocess.TimeoutExpired('core', 5), None]
+        with self.assertRaisesRegex(ValueError, 'core provider load/count mismatch'):
+            self.review()
+        self.assertEqual(self.opener.open.call_count, 100)
+        self.process.terminate.assert_called_once_with()
+        self.process.kill.assert_called_once_with()
+        self.assertEqual(self.process.wait.call_args_list, [call(timeout=5), call()])
+
+
 class PublisherTransactionTests(unittest.TestCase):
     def test_core_review_cannot_be_omitted(self):
         import publish

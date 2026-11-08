@@ -92,9 +92,15 @@ def review_core(core, contents, entries):
                         request = urllib.request.Request(f'http://127.0.0.1:{api}/providers/rules',
                             headers={'Authorization': 'Bearer isolated-rule-review'})
                         with opener.open(request, timeout=.5) as response:
-                            loaded = json.load(response)['providers']
-                        if all(loaded.get(e['name'], {}).get('ruleCount') == e['count']
-                               for e in entries if e['behavior'] != 'packages'):
+                            status = json.load(response)
+                        # The API may respond before its provider maps are ready.
+                        # Malformed or partial status must retry, never pass review.
+                        loaded = status.get('providers') if isinstance(status, dict) else None
+                        if isinstance(loaded, dict) and all(
+                                isinstance(loaded.get(e['name']), dict)
+                                and type(loaded[e['name']].get('ruleCount')) is int
+                                and loaded[e['name']]['ruleCount'] == e['count']
+                                for e in entries if e['behavior'] != 'packages'):
                             return
                     except (OSError, ValueError, KeyError):
                         pass
