@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
-  "version": "2.0.45",
+  "version": "2.0.46",
   "componentVersions": {
-    "rules": "2.0.44",
+    "rules": "2.0.45",
     "directApps": "1.0.1",
     "proxyApps": "1.0.1"
   },
   "upstream": {
     "repository": "Loyalsoldier/clash-rules",
-    "commit": "1aa9d915f68b8c9cd79c0b6d3e22a101c83c22f2"
+    "commit": "2c8874ed8f30d06e80432b43556a18756bddabb4"
   },
   "files": [
     {
@@ -32,8 +32,8 @@
     {
       "name": "company_asn.yaml",
       "behavior": "ipcidr",
-      "count": 9640,
-      "sha256": "90f4d9c3f9344611ebbad13a469e336a2db73b49b63f21b9112854c536b7f7b3"
+      "count": 9665,
+      "sha256": "2f748880ccd7eaa65af9f408364dcab9a6e49cefd7234b89ce7b8127d4c555b7"
     },
     {
       "name": "direct_apps.yaml",
