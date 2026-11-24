@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
-  "version": "2.0.48",
+  "version": "2.0.49",
   "componentVersions": {
-    "rules": "2.0.47",
+    "rules": "2.0.48",
     "directApps": "1.0.1",
     "proxyApps": "1.0.1"
   },
   "upstream": {
     "repository": "Loyalsoldier/clash-rules",
-    "commit": "9c0a986e7a8251788f6d8470111bec5559c4a39a"
+    "commit": "f47a8ad990cc4e54fa0b89924a8a60d327384578"
   },
   "files": [
     {
@@ -44,8 +44,8 @@
     {
       "name": "foreign_services.yaml",
       "behavior": "domain",
-      "count": 27271,
-      "sha256": "435b7a39217ae4d002fef8e1c14011f1d3366bf9adb27dbbe26a0d1fcdaa7bec"
+      "count": 27272,
+      "sha256": "076125793fe117a719f3e694143767f20edfd6f49e06570bdea47f7eaeebe466"
     },
     {
       "name": "gfw.yaml",
